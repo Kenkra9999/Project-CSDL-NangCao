@@ -1,4 +1,5 @@
--- Quy mô: 15 Người dùng | 21 Danh mục (3 cấp) | 18 Tài sản (6 mỗi loại)
+-- Chạy sau DDL_HeThongDauGia.sql trên CSDL mẫu mới tạo.
+-- 15 người dùng, 21 danh mục, 18 tài sản, 6 phiên đấu giá.
 
 BEGIN;
 
@@ -123,9 +124,80 @@ INSERT INTO THIETBIDIENTU (MaTaiSan, ThuongHieu, MauThietBi, SoSeRi, TinhTrang) 
 (17, 'DJI',       'Đen Carbon Fiber',             'DJI-INS3-CN-77412','Mới 99% bay 3 giờ'),
 (18, 'Accuphase', 'Vàng Champagne (Gold)',        'ACC-E800-JP-33901','Nguyên thùng xốp 99.5%');
 
--- Đồng bộ lại Sequence cho các cột IDENTITY
+-- 7. Phiên mở, chưa mở, đã chốt có người thắng và đã chốt không có lượt trả.
+INSERT INTO PHIENDAUGIA (
+    MaPhien, MaTaiSan, GiaKhoiDiem, BuocGia, ThoiDiemMo, ThoiDiemDong, TrangThaiPhien
+) OVERRIDING SYSTEM VALUE VALUES
+(1, 1,  5000000, 250000, CURRENT_TIMESTAMP - INTERVAL '1 day', CURRENT_TIMESTAMP + INTERVAL '30 minutes', 'DANG_DIEN_RA'),
+(2, 7,  2000000, 100000, CURRENT_TIMESTAMP - INTERVAL '3 days', CURRENT_TIMESTAMP - INTERVAL '2 days', 'DA_DONG'),
+(3, 13, 8000000, 500000, CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '1 day', 'THAT_BAI'),
+(4, 14, 3000000, 200000, CURRENT_TIMESTAMP - INTERVAL '1 day', CURRENT_TIMESTAMP + INTERVAL '2 hours', 'DANG_DIEN_RA'),
+(5, 2,  4000000, 200000, CURRENT_TIMESTAMP + INTERVAL '1 day', CURRENT_TIMESTAMP + INTERVAL '2 days', 'CHUA_MO'),
+(6, 8,  1000000, 100000, CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '1 day', 'DA_DONG');
+
+-- 8. Đăng ký trước thời điểm trả giá. Người bán không đăng ký phiên của mình.
+INSERT INTO DANGKY (MaPhien, MaNguoiDung, TrangThaiDangKy, ThoiDiemDangKy)
+SELECT dk.MaPhien, dk.MaNguoiDung, dk.TrangThai, p.ThoiDiemMo + INTERVAL '5 minutes'
+FROM (VALUES
+    (1, 7, 'DA_DUYET'), (1, 8, 'DA_DUYET'), (1, 12, 'CHO_DUYET'),
+    (2, 7, 'DA_DUYET'), (2, 12, 'DA_DUYET'),
+    (3, 8, 'DA_DUYET'),
+    (4, 7, 'DA_DUYET'), (4, 8, 'DA_DUYET'), (4, 12, 'CHO_DUYET'),
+    (6, 7, 'DA_DUYET'), (6, 13, 'DA_DUYET')
+) AS dk(MaPhien, MaNguoiDung, TrangThai)
+JOIN PHIENDAUGIA p ON p.MaPhien = dk.MaPhien;
+
+-- 9. Lịch sử lượt hợp lệ, mỗi lượt có một mã yêu cầu riêng.
+INSERT INTO LUOTTRAGIA (MaPhien, MaNguoiTraGia, SoTien, MaYeuCau, ThoiDiemChapNhan)
+SELECT lg.MaPhien, lg.MaNguoiDung, lg.SoTien, lg.MaYeuCau::UUID,
+       p.ThoiDiemMo + lg.SauKhiMo
+FROM (VALUES
+    (1, 7, 5000000, '19000000-0000-4000-8000-000000000001', INTERVAL '10 minutes'),
+    (1, 8, 5250000, '19000000-0000-4000-8000-000000000002', INTERVAL '20 minutes'),
+    (1, 7, 5500000, '19000000-0000-4000-8000-000000000003', INTERVAL '30 minutes'),
+    (2, 7, 2000000, '19000000-0000-4000-8000-000000000004', INTERVAL '10 minutes'),
+    (2, 12,2100000, '19000000-0000-4000-8000-000000000005', INTERVAL '20 minutes'),
+    (6, 7, 1000000, '19000000-0000-4000-8000-000000000006', INTERVAL '10 minutes'),
+    (6, 13,1200000, '19000000-0000-4000-8000-000000000007', INTERVAL '20 minutes')
+) AS lg(MaPhien, MaNguoiDung, SoTien, MaYeuCau, SauKhiMo)
+JOIN PHIENDAUGIA p ON p.MaPhien = lg.MaPhien;
+
+WITH LuotCaoNhat AS (
+    SELECT DISTINCT ON (MaPhien) MaPhien, MaLuotTraGia, SoTien,
+           COUNT(*) OVER (PARTITION BY MaPhien) AS SoLuot
+    FROM LUOTTRAGIA
+    ORDER BY MaPhien, SoTien DESC, MaLuotTraGia
+)
+UPDATE PHIENDAUGIA p
+SET GiaHienTai = l.SoTien, MaLuotDanDau = l.MaLuotTraGia, PhienBan = l.SoLuot
+FROM LuotCaoNhat l
+WHERE p.MaPhien = l.MaPhien;
+
+-- 10. Phiên thất bại có kết quả với MaLuotThang NULL theo EER.
+INSERT INTO KETQUADAUGIA (MaPhien, MaLuotThang, ThoiDiemChot)
+SELECT MaPhien, MaLuotDanDau, ThoiDiemDong
+FROM PHIENDAUGIA
+WHERE TrangThaiPhien IN ('DA_DONG', 'THAT_BAI');
+
+UPDATE PHIENDAUGIA
+SET PhienBan = PhienBan + 1
+WHERE TrangThaiPhien IN ('DA_DONG', 'THAT_BAI');
+
+-- 11. Nhật ký hệ thống khi chốt phiên không có tác nhân người dùng.
+INSERT INTO NHATKYTHAYDOI (MaPhien, MaTacNhan, HanhDong, ChiTiet, ThoiDiemGhi)
+SELECT MaPhien, MaNguoiTraGia, 'CHAP_NHAN_TRA_GIA',
+       jsonb_build_object('MaLuotTraGia', MaLuotTraGia, 'SoTien', SoTien, 'MaYeuCau', MaYeuCau),
+       ThoiDiemChapNhan
+FROM LUOTTRAGIA
+UNION ALL
+SELECT MaPhien, NULL::BIGINT, 'DONG_PHIEN',
+       jsonb_build_object('MaLuotThang', MaLuotThang), ThoiDiemChot
+FROM KETQUADAUGIA;
+
+-- Đồng bộ sequence cho các bảng được chèn ID cố định.
 SELECT setval(pg_get_serial_sequence('NGUOIDUNG', 'manguoidung'), (SELECT MAX(MaNguoiDung) FROM NGUOIDUNG));
 SELECT setval(pg_get_serial_sequence('DANHMUC',   'madanhmuc'),   (SELECT MAX(MaDanhMuc) FROM DANHMUC));
 SELECT setval(pg_get_serial_sequence('TAISAN',    'mataisan'),    (SELECT MAX(MaTaiSan) FROM TAISAN));
+SELECT setval(pg_get_serial_sequence('PHIENDAUGIA', 'maphien'), (SELECT MAX(MaPhien) FROM PHIENDAUGIA));
 
 COMMIT;
