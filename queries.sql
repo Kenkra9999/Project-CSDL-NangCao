@@ -276,6 +276,112 @@ SELECT COUNT(*) AS SoPhienDaChot, COUNT(MaLuotThang) AS SoPhienThanhCong,
        ROUND(100.0 * COUNT(MaLuotThang) / NULLIF(COUNT(*), 0), 2) AS TyLeThanhCongPhanTram
 FROM KETQUADAUGIA;
 
+-- Xếp hạng người trả giá trong từng phiên bằng hàm cửa sổ (mỗi người lấy mức giá cao nhất).
+-- Hạng 1 là người dẫn đầu; cùng giá thì lượt được chấp nhận trước đứng trên (quy tắc 4).
+-- Cột KhopMaLuotDanDau đối chiếu kết quả tính lại với MaLuotDanDau lưu trong PHIENDAUGIA.
+WITH GiaCaoNhatMoiNguoi AS (
+    SELECT DISTINCT ON (l.MaPhien, l.MaNguoiTraGia)
+           l.MaPhien, l.MaNguoiTraGia, l.MaLuotTraGia, l.SoTien, l.ThoiDiemChapNhan
+    FROM LUOTTRAGIA l
+    ORDER BY l.MaPhien, l.MaNguoiTraGia, l.SoTien DESC, l.ThoiDiemChapNhan
+), XepHang AS (
+    SELECT g.*,
+           ROW_NUMBER() OVER w AS Hang,
+           LEAD(g.SoTien) OVER w AS GiaHangNhi,
+           COUNT(*) OVER (PARTITION BY g.MaPhien) AS SoNguoiTraGia
+    FROM GiaCaoNhatMoiNguoi g
+    WINDOW w AS (PARTITION BY g.MaPhien ORDER BY g.SoTien DESC, g.ThoiDiemChapNhan, g.MaLuotTraGia)
+)
+SELECT x.MaPhien, ts.TenTaiSan, p.TrangThaiPhien,
+       nd.HoTen AS NguoiDanDau, x.SoTien AS GiaDanDau,
+       x.GiaHangNhi, x.SoTien - x.GiaHangNhi AS CachBietHangNhi,
+       x.SoNguoiTraGia,
+       ROUND(100.0 * (x.SoTien - p.GiaKhoiDiem) / p.GiaKhoiDiem, 2) AS PhanTramTangSoVoiKhoiDiem,
+       (x.MaLuotTraGia = p.MaLuotDanDau) AS KhopMaLuotDanDau
+FROM XepHang x
+JOIN PHIENDAUGIA p ON p.MaPhien = x.MaPhien
+JOIN TAISAN ts ON ts.MaTaiSan = p.MaTaiSan
+JOIN NGUOIDUNG nd ON nd.MaNguoiDung = x.MaNguoiTraGia
+WHERE x.Hang = 1
+ORDER BY x.MaPhien;
+
+-- Tỷ lệ phiên thành công theo từng nhánh danh mục gốc.
+-- CTE đệ quy gắn mỗi danh mục lá về danh mục gốc; ROLLUP thêm dòng tổng toàn hệ thống.
+WITH RECURSIVE GocDanhMuc AS (
+    SELECT MaDanhMuc, MaDanhMuc AS MaGoc, TenDanhMuc AS TenGoc
+    FROM DANHMUC
+    WHERE MaDanhMucCha IS NULL
+
+    UNION
+
+    SELECT con.MaDanhMuc, cha.MaGoc, cha.TenGoc
+    FROM DANHMUC con
+    JOIN GocDanhMuc cha ON con.MaDanhMucCha = cha.MaDanhMuc
+)
+SELECT CASE WHEN GROUPING(g.MaGoc) = 1 THEN 'TOÀN HỆ THỐNG' ELSE g.TenGoc END AS NhanhDanhMuc,
+       COUNT(*) AS SoPhienDaChot,
+       COUNT(k.MaLuotThang) AS SoPhienThanhCong,
+       COUNT(*) - COUNT(k.MaLuotThang) AS SoPhienThatBai,
+       ROUND(100.0 * COUNT(k.MaLuotThang) / NULLIF(COUNT(*), 0), 2) AS TyLeThanhCongPhanTram,
+       COALESCE(SUM(l.SoTien), 0) AS TongGiaTriGiaoDich
+FROM KETQUADAUGIA k
+JOIN PHIENDAUGIA p ON p.MaPhien = k.MaPhien
+JOIN TAISAN ts ON ts.MaTaiSan = p.MaTaiSan
+JOIN GocDanhMuc g ON g.MaDanhMuc = ts.MaDanhMuc
+LEFT JOIN LUOTTRAGIA l ON l.MaLuotTraGia = k.MaLuotThang AND l.MaPhien = k.MaPhien
+GROUP BY ROLLUP ((g.MaGoc, g.TenGoc))
+ORDER BY GROUPING(g.MaGoc), g.MaGoc;
+
+-- Bảng xếp hạng người mua trên các phiên đã chốt: số phiên tham gia, số phiên thắng, tổng chi.
+WITH ThamGia AS (
+    SELECT l.MaNguoiTraGia AS MaNguoiDung, COUNT(DISTINCT l.MaPhien) AS SoPhienThamGia
+    FROM LUOTTRAGIA l
+    JOIN KETQUADAUGIA k ON k.MaPhien = l.MaPhien
+    GROUP BY l.MaNguoiTraGia
+), Thang AS (
+    SELECT l.MaNguoiTraGia AS MaNguoiDung, COUNT(*) AS SoPhienThang, SUM(l.SoTien) AS TongGiaThang
+    FROM KETQUADAUGIA k
+    JOIN LUOTTRAGIA l ON l.MaLuotTraGia = k.MaLuotThang AND l.MaPhien = k.MaPhien
+    GROUP BY l.MaNguoiTraGia
+)
+SELECT DENSE_RANK() OVER (ORDER BY COALESCE(th.TongGiaThang, 0) DESC) AS Hang,
+       nd.HoTen,
+       tg.SoPhienThamGia,
+       COALESCE(th.SoPhienThang, 0) AS SoPhienThang,
+       ROUND(100.0 * COALESCE(th.SoPhienThang, 0) / tg.SoPhienThamGia, 2) AS TyLeThangPhanTram,
+       COALESCE(th.TongGiaThang, 0) AS TongGiaThang
+FROM ThamGia tg
+JOIN NGUOIDUNG nd ON nd.MaNguoiDung = tg.MaNguoiDung
+LEFT JOIN Thang th ON th.MaNguoiDung = tg.MaNguoiDung
+ORDER BY Hang, nd.HoTen;
+
+-- Kiểm tra dữ liệu theo quy tắc nghiệp vụ. Kết quả rỗng nghĩa là không có vi phạm.
+WITH LuotCoGiaTruoc AS (
+    SELECT l.*,
+           LAG(l.SoTien) OVER (PARTITION BY l.MaPhien
+                               ORDER BY l.ThoiDiemChapNhan, l.MaLuotTraGia) AS GiaTruoc
+    FROM LUOTTRAGIA l
+)
+SELECT l.MaPhien, l.MaLuotTraGia, v.ViPham
+FROM LuotCoGiaTruoc l
+JOIN PHIENDAUGIA p ON p.MaPhien = l.MaPhien
+JOIN TAISAN ts ON ts.MaTaiSan = p.MaTaiSan
+JOIN DANGKY dk ON dk.MaPhien = l.MaPhien AND dk.MaNguoiDung = l.MaNguoiTraGia
+CROSS JOIN LATERAL (VALUES
+    (l.SoTien < COALESCE(l.GiaTruoc + p.BuocGia, p.GiaKhoiDiem), 'Giá thấp hơn mức tối thiểu'),
+    (MOD(l.SoTien - p.GiaKhoiDiem, p.BuocGia) <> 0,              'Giá lệch lưới bước giá'),
+    (l.ThoiDiemChapNhan NOT BETWEEN p.ThoiDiemMo AND p.ThoiDiemDong, 'Trả giá ngoài giờ phiên'),
+    (l.MaNguoiTraGia = ts.MaNguoiBan,                              'Người bán tự trả giá'),
+    (dk.TrangThaiDangKy <> 'DA_DUYET',                             'Đăng ký chưa được duyệt')
+) AS v(CoViPham, ViPham)
+WHERE v.CoViPham
+UNION ALL
+SELECT p.MaPhien, p.MaLuotDanDau, 'GiaHienTai khác giá cao nhất của phiên'
+FROM PHIENDAUGIA p
+WHERE p.GiaHienTai IS DISTINCT FROM
+      (SELECT MAX(l.SoTien) FROM LUOTTRAGIA l WHERE l.MaPhien = p.MaPhien)
+ORDER BY 1, 2;
+
 -- Hai hàm cùng khóa dòng phiên. Nếu lỗi, các ghi chép của lời gọi cùng rollback.
 CREATE OR REPLACE FUNCTION fn_TraGia(
     p_MaPhien BIGINT, p_MaNguoiDung BIGINT, p_SoTien NUMERIC, p_MaYeuCau UUID

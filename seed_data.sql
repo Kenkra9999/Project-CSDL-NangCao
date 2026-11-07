@@ -1,5 +1,6 @@
 -- Chạy sau DDL_HeThongDauGia.sql trên CSDL mẫu mới tạo.
--- 15 người dùng, 21 danh mục, 18 tài sản, 6 phiên đấu giá.
+-- 15 người dùng, 21 danh mục, 18 tài sản, 20 phiên đấu giá, 45 lượt trả giá.
+-- Phiên: 6 DANG_DIEN_RA, 3 CHUA_MO, 7 DA_DONG (có người thắng), 4 THAT_BAI (không ai trả giá).
 
 BEGIN;
 
@@ -133,18 +134,64 @@ INSERT INTO PHIENDAUGIA (
 (3, 13, 8000000, 500000, CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '1 day', 'THAT_BAI'),
 (4, 14, 3000000, 200000, CURRENT_TIMESTAMP - INTERVAL '1 day', CURRENT_TIMESTAMP + INTERVAL '2 hours', 'DANG_DIEN_RA'),
 (5, 2,  4000000, 200000, CURRENT_TIMESTAMP + INTERVAL '1 day', CURRENT_TIMESTAMP + INTERVAL '2 days', 'CHUA_MO'),
-(6, 8,  1000000, 100000, CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '1 day', 'DA_DONG');
+(6, 8,  1000000, 100000, CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '1 day', 'DA_DONG'),
+-- Phiên 7-20: trải đều 16 ngày gần đây để thống kê tỷ lệ thành công có ý nghĩa.
+(7,  3,  80000000,  5000000, CURRENT_TIMESTAMP - INTERVAL '16 days', CURRENT_TIMESTAMP - INTERVAL '12 days', 'DA_DONG'),
+(8,  4,  40000000,  2000000, CURRENT_TIMESTAMP - INTERVAL '15 days', CURRENT_TIMESTAMP - INTERVAL '11 days', 'THAT_BAI'),
+(9,  9,   8000000,   500000, CURRENT_TIMESTAMP - INTERVAL '11 days', CURRENT_TIMESTAMP - INTERVAL '8 days',  'THAT_BAI'),
+-- Phiên 10: tài sản 9 được đăng lại sau khi phiên 9 thất bại (quy tắc 5).
+(10, 9,   6000000,   500000, CURRENT_TIMESTAMP - INTERVAL '6 days',  CURRENT_TIMESTAMP - INTERVAL '2 days',  'DA_DONG'),
+(11, 10, 120000000, 5000000, CURRENT_TIMESTAMP - INTERVAL '10 days', CURRENT_TIMESTAMP - INTERVAL '5 days',  'DA_DONG'),
+(12, 12, 250000000, 10000000,CURRENT_TIMESTAMP - INTERVAL '3 days',  CURRENT_TIMESTAMP + INTERVAL '2 days',  'DANG_DIEN_RA'),
+(13, 15, 220000000, 10000000,CURRENT_TIMESTAMP - INTERVAL '5 days',  CURRENT_TIMESTAMP - INTERVAL '1 day',   'THAT_BAI'),
+(14, 16, 90000000,  2000000, CURRENT_TIMESTAMP - INTERVAL '4 days',  CURRENT_TIMESTAMP + INTERVAL '1 day',   'DANG_DIEN_RA'),
+-- Phiên 15: lượt trả cuối rơi vào 20 giây trước giờ đóng nên được gia hạn thêm 2 phút (quy tắc 2).
+(15, 17, 200000000, 5000000, CURRENT_TIMESTAMP - INTERVAL '3 days',
+     CURRENT_TIMESTAMP - INTERVAL '3 days' + INTERVAL '2 days 18 hours 2 minutes', 'DA_DONG'),
+(16, 5,  35000000,  1500000, CURRENT_TIMESTAMP - INTERVAL '2 days',  CURRENT_TIMESTAMP + INTERVAL '3 days',  'DANG_DIEN_RA'),
+(17, 11, 45000000,  2000000, CURRENT_TIMESTAMP - INTERVAL '1 day',   CURRENT_TIMESTAMP + INTERVAL '4 days',  'DANG_DIEN_RA'),
+(18, 6,  60000000,  3000000, CURRENT_TIMESTAMP + INTERVAL '2 days',  CURRENT_TIMESTAMP + INTERVAL '7 days',  'CHUA_MO'),
+(19, 18, 150000000, 5000000, CURRENT_TIMESTAMP + INTERVAL '1 day',   CURRENT_TIMESTAMP + INTERVAL '6 days',  'CHUA_MO'),
+-- Phiên 20: tài sản 13 đăng lại sau khi phiên 3 thất bại.
+(20, 13, 7000000,   500000,  CURRENT_TIMESTAMP - INTERVAL '22 hours', CURRENT_TIMESTAMP - INTERVAL '2 hours', 'DA_DONG');
 
 -- 8. Đăng ký trước thời điểm trả giá. Người bán không đăng ký phiên của mình.
 INSERT INTO DANGKY (MaPhien, MaNguoiDung, TrangThaiDangKy, ThoiDiemDangKy)
-SELECT dk.MaPhien, dk.MaNguoiDung, dk.TrangThai, p.ThoiDiemMo + INTERVAL '5 minutes'
+-- LechSoVoiMo: thời điểm đăng ký so với giờ mở phiên (âm = đăng ký trước khi mở).
+SELECT dk.MaPhien, dk.MaNguoiDung, dk.TrangThai, p.ThoiDiemMo + dk.LechSoVoiMo
 FROM (VALUES
-    (1, 7, 'DA_DUYET'), (1, 8, 'DA_DUYET'), (1, 12, 'CHO_DUYET'),
-    (2, 7, 'DA_DUYET'), (2, 12, 'DA_DUYET'),
-    (3, 8, 'DA_DUYET'),
-    (4, 7, 'DA_DUYET'), (4, 8, 'DA_DUYET'), (4, 12, 'CHO_DUYET'),
-    (6, 7, 'DA_DUYET'), (6, 13, 'DA_DUYET')
-) AS dk(MaPhien, MaNguoiDung, TrangThai)
+    (1, 7, 'DA_DUYET', INTERVAL '5 minutes'), (1, 8, 'DA_DUYET', INTERVAL '5 minutes'),
+    (1, 12, 'CHO_DUYET', INTERVAL '5 minutes'),
+    (2, 7, 'DA_DUYET', INTERVAL '5 minutes'), (2, 12, 'DA_DUYET', INTERVAL '5 minutes'),
+    (3, 8, 'DA_DUYET', INTERVAL '5 minutes'),
+    (4, 7, 'DA_DUYET', INTERVAL '5 minutes'), (4, 8, 'DA_DUYET', INTERVAL '5 minutes'),
+    (4, 12, 'CHO_DUYET', INTERVAL '5 minutes'),
+    (6, 7, 'DA_DUYET', INTERVAL '5 minutes'), (6, 13, 'DA_DUYET', INTERVAL '5 minutes'),
+    (7, 5, 'DA_DUYET', INTERVAL '-6 hours'), (7, 6, 'DA_DUYET', INTERVAL '-6 hours'),
+    (7, 10, 'DA_DUYET', INTERVAL '-6 hours'),
+    (8, 2, 'DA_DUYET', INTERVAL '-6 hours'), (8, 7, 'TU_CHOI', INTERVAL '-6 hours'),
+    (9, 12, 'DA_DUYET', INTERVAL '-6 hours'),
+    (10, 12, 'DA_DUYET', INTERVAL '-6 hours'), (10, 14, 'DA_DUYET', INTERVAL '-6 hours'),
+    (11, 1, 'DA_DUYET', INTERVAL '-6 hours'), (11, 4, 'DA_DUYET', INTERVAL '-6 hours'),
+    (11, 7, 'DA_DUYET', INTERVAL '-6 hours'), (11, 13, 'DA_DUYET', INTERVAL '-6 hours'),
+    (12, 3, 'DA_DUYET', INTERVAL '-6 hours'), (12, 6, 'DA_DUYET', INTERVAL '-6 hours'),
+    (12, 9, 'DA_DUYET', INTERVAL '-6 hours'), (12, 15, 'DA_DUYET', INTERVAL '-6 hours'),
+    (13, 9, 'DA_DUYET', INTERVAL '-6 hours'),
+    (14, 8, 'DA_DUYET', INTERVAL '-6 hours'), (14, 11, 'DA_DUYET', INTERVAL '-6 hours'),
+    (14, 13, 'DA_DUYET', INTERVAL '-6 hours'), (14, 14, 'DA_DUYET', INTERVAL '-6 hours'),
+    (14, 15, 'CHO_DUYET', INTERVAL '-6 hours'),
+    (15, 4, 'DA_DUYET', INTERVAL '-6 hours'), (15, 6, 'DA_DUYET', INTERVAL '-6 hours'),
+    (15, 13, 'DA_DUYET', INTERVAL '-6 hours'), (15, 15, 'DA_DUYET', INTERVAL '-6 hours'),
+    (16, 1, 'DA_DUYET', INTERVAL '-6 hours'), (16, 7, 'DA_DUYET', INTERVAL '-6 hours'),
+    (16, 14, 'DA_DUYET', INTERVAL '-6 hours'),
+    (17, 5, 'DA_DUYET', INTERVAL '-6 hours'), (17, 11, 'DA_DUYET', INTERVAL '-6 hours'),
+    -- Phiên chưa mở: đăng ký cách đây 6 giờ, đang chờ đến giờ mở.
+    (18, 2, 'DA_DUYET', INTERVAL '-2 days -6 hours'), (18, 12, 'CHO_DUYET', INTERVAL '-2 days -6 hours'),
+    (19, 5, 'CHO_DUYET', INTERVAL '-1 day -6 hours'), (19, 7, 'DA_DUYET', INTERVAL '-1 day -6 hours'),
+    (19, 10, 'TU_CHOI', INTERVAL '-1 day -6 hours'),
+    (20, 3, 'DA_DUYET', INTERVAL '-6 hours'), (20, 8, 'DA_DUYET', INTERVAL '-6 hours'),
+    (20, 14, 'DA_DUYET', INTERVAL '-6 hours')
+) AS dk(MaPhien, MaNguoiDung, TrangThai, LechSoVoiMo)
 JOIN PHIENDAUGIA p ON p.MaPhien = dk.MaPhien;
 
 -- 9. Lịch sử lượt hợp lệ, mỗi lượt có một mã yêu cầu riêng.
@@ -158,7 +205,46 @@ FROM (VALUES
     (2, 7, 2000000, '19000000-0000-4000-8000-000000000004', INTERVAL '10 minutes'),
     (2, 12,2100000, '19000000-0000-4000-8000-000000000005', INTERVAL '20 minutes'),
     (6, 7, 1000000, '19000000-0000-4000-8000-000000000006', INTERVAL '10 minutes'),
-    (6, 13,1200000, '19000000-0000-4000-8000-000000000007', INTERVAL '20 minutes')
+    (6, 13,1200000, '19000000-0000-4000-8000-000000000007', INTERVAL '20 minutes'),
+    -- Mọi giá đều nằm trên lưới GiaKhoiDiem + k * BuocGia và tăng ít nhất một bước.
+    (7, 5,  80000000, '19000000-0000-4000-8000-000000000008', INTERVAL '1 hour'),
+    (7, 10, 85000000, '19000000-0000-4000-8000-000000000009', INTERVAL '6 hours'),
+    (7, 5,  90000000, '19000000-0000-4000-8000-000000000010', INTERVAL '1 day'),
+    (7, 6, 100000000, '19000000-0000-4000-8000-000000000011', INTERVAL '2 days'),
+    (7, 10,105000000, '19000000-0000-4000-8000-000000000012', INTERVAL '3 days 12 hours'),
+    (10, 12, 6000000, '19000000-0000-4000-8000-000000000013', INTERVAL '4 hours'),
+    (10, 14, 6500000, '19000000-0000-4000-8000-000000000014', INTERVAL '1 day'),
+    (10, 12, 7500000, '19000000-0000-4000-8000-000000000015', INTERVAL '2 days'),
+    (11, 4, 120000000, '19000000-0000-4000-8000-000000000016', INTERVAL '3 hours'),
+    (11, 13,125000000, '19000000-0000-4000-8000-000000000017', INTERVAL '9 hours'),
+    (11, 4, 130000000, '19000000-0000-4000-8000-000000000018', INTERVAL '1 day'),
+    (11, 1, 140000000, '19000000-0000-4000-8000-000000000019', INTERVAL '2 days'),
+    (11, 13,150000000, '19000000-0000-4000-8000-000000000020', INTERVAL '3 days'),
+    (11, 4, 155000000, '19000000-0000-4000-8000-000000000021', INTERVAL '4 days 20 hours'),
+    (12, 9, 250000000, '19000000-0000-4000-8000-000000000022', INTERVAL '2 hours'),
+    (12, 3, 260000000, '19000000-0000-4000-8000-000000000023', INTERVAL '8 hours'),
+    (12, 9, 270000000, '19000000-0000-4000-8000-000000000024', INTERVAL '1 day'),
+    (12, 15,290000000, '19000000-0000-4000-8000-000000000025', INTERVAL '2 days'),
+    (12, 3, 300000000, '19000000-0000-4000-8000-000000000026', INTERVAL '2 days 18 hours'),
+    (14, 11, 90000000, '19000000-0000-4000-8000-000000000027', INTERVAL '1 hour'),
+    (14, 14, 92000000, '19000000-0000-4000-8000-000000000028', INTERVAL '4 hours'),
+    (14, 8,  96000000, '19000000-0000-4000-8000-000000000029', INTERVAL '1 day'),
+    (14, 11,100000000, '19000000-0000-4000-8000-000000000030', INTERVAL '2 days'),
+    (14, 14,102000000, '19000000-0000-4000-8000-000000000031', INTERVAL '3 days'),
+    (14, 13,106000000, '19000000-0000-4000-8000-000000000032', INTERVAL '3 days 12 hours'),
+    (15, 13,200000000, '19000000-0000-4000-8000-000000000033', INTERVAL '1 hour'),
+    (15, 6, 205000000, '19000000-0000-4000-8000-000000000034', INTERVAL '5 hours'),
+    (15, 13,215000000, '19000000-0000-4000-8000-000000000035', INTERVAL '1 day'),
+    (15, 4, 220000000, '19000000-0000-4000-8000-000000000036', INTERVAL '2 days'),
+    (15, 15,230000000, '19000000-0000-4000-8000-000000000037', INTERVAL '2 days 17 hours 59 minutes 40 seconds'),
+    (16, 1, 35000000, '19000000-0000-4000-8000-000000000038', INTERVAL '3 hours'),
+    (16, 14,36500000, '19000000-0000-4000-8000-000000000039', INTERVAL '10 hours'),
+    (16, 1, 38000000, '19000000-0000-4000-8000-000000000040', INTERVAL '1 day'),
+    (16, 7, 41000000, '19000000-0000-4000-8000-000000000041', INTERVAL '1 day 12 hours'),
+    (20, 8,  7000000, '19000000-0000-4000-8000-000000000042', INTERVAL '1 hour'),
+    (20, 14, 7500000, '19000000-0000-4000-8000-000000000043', INTERVAL '5 hours'),
+    (20, 8,  8500000, '19000000-0000-4000-8000-000000000044', INTERVAL '12 hours'),
+    (20, 3,  9000000, '19000000-0000-4000-8000-000000000045', INTERVAL '18 hours')
 ) AS lg(MaPhien, MaNguoiDung, SoTien, MaYeuCau, SauKhiMo)
 JOIN PHIENDAUGIA p ON p.MaPhien = lg.MaPhien;
 
@@ -192,7 +278,17 @@ FROM LUOTTRAGIA
 UNION ALL
 SELECT MaPhien, NULL::BIGINT, 'DONG_PHIEN',
        jsonb_build_object('MaLuotThang', MaLuotThang), ThoiDiemChot
-FROM KETQUADAUGIA;
+FROM KETQUADAUGIA
+UNION ALL
+-- Chống vây giá: lượt cuối của phiên 15 làm giờ đóng lùi thêm 2 phút.
+SELECT l.MaPhien, NULL::BIGINT, 'GIA_HAN_PHIEN',
+       jsonb_build_object('MaLuotKichHoat', l.MaLuotTraGia,
+                          'GioDongCu', p.ThoiDiemDong - INTERVAL '2 minutes',
+                          'GioDongMoi', p.ThoiDiemDong),
+       l.ThoiDiemChapNhan
+FROM LUOTTRAGIA l
+JOIN PHIENDAUGIA p ON p.MaPhien = l.MaPhien AND p.MaLuotDanDau = l.MaLuotTraGia
+WHERE l.MaPhien = 15;
 
 -- Đồng bộ sequence cho các bảng được chèn ID cố định.
 SELECT setval(pg_get_serial_sequence('NGUOIDUNG', 'manguoidung'), (SELECT MAX(MaNguoiDung) FROM NGUOIDUNG));
