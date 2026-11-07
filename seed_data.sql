@@ -1,4 +1,5 @@
--- Chạy sau DDL_HeThongDauGia.sql trên CSDL mẫu mới tạo.
+-- Quy mô: 15 Người dùng | 21 Danh mục (3 cấp) | 18 Tài sản (6 mỗi loại)
+-- Phần thành viên 2 (bảng 7-11): chạy sau DDL_HeThongDauGia.sql trên CSDL mới tạo.
 -- 15 người dùng, 21 danh mục, 18 tài sản, 20 phiên đấu giá, 45 lượt trả giá.
 -- Phiên: 6 DANG_DIEN_RA, 3 CHUA_MO, 7 DA_DONG (có người thắng), 4 THAT_BAI (không ai trả giá).
 
@@ -290,7 +291,7 @@ FROM LUOTTRAGIA l
 JOIN PHIENDAUGIA p ON p.MaPhien = l.MaPhien AND p.MaLuotDanDau = l.MaLuotTraGia
 WHERE l.MaPhien = 15;
 
--- Đồng bộ sequence cho các bảng được chèn ID cố định.
+-- Đồng bộ lại Sequence cho các cột IDENTITY
 SELECT setval(pg_get_serial_sequence('NGUOIDUNG', 'manguoidung'), (SELECT MAX(MaNguoiDung) FROM NGUOIDUNG));
 SELECT setval(pg_get_serial_sequence('DANHMUC',   'madanhmuc'),   (SELECT MAX(MaDanhMuc) FROM DANHMUC));
 SELECT setval(pg_get_serial_sequence('TAISAN',    'mataisan'),    (SELECT MAX(MaTaiSan) FROM TAISAN));

@@ -1,6 +1,3 @@
--- Thứ tự chạy: DDL_HeThongDauGia.sql, seed_data.sql, queries.sql.
-BEGIN;
-
 -- Truy vấn: Xây dựng cây phân cấp danh mục và thống kê cộng dồn 
 -- (Roll-up) tổng số tài sản & phiên đấu giá từ danh mục con lên danh mục cha
 
@@ -25,7 +22,7 @@ WITH RECURSIVE CayDanhMuc AS (
         con.MaDanhMucCha,
         cha.CapDo + 1 AS CapDo,
         (cha.DuongDanPhanCap || ' - ' || con.TenDanhMuc)::TEXT AS DuongDanPhanCap,
-        REPEAT('    ', cha.CapDo) || '|-- ' || con.TenDanhMuc AS TenHienThiCay
+        (REPEAT('    ', cha.CapDo) || '|-- ' || con.TenDanhMuc)::VARCHAR(255) AS TenHienThiCay
     FROM DANHMUC con
     INNER JOIN CayDanhMuc cha ON con.MaDanhMucCha = cha.MaDanhMuc
 ),
@@ -35,8 +32,8 @@ QuanHeToTienConChau AS (
     SELECT MaDanhMuc AS MaToTien, MaDanhMuc AS MaConChau
     FROM DANHMUC
     
-    UNION
-
+    UNION ALL
+    
     SELECT qh.MaToTien, dm.MaDanhMuc AS MaConChau
     FROM QuanHeToTienConChau qh
     INNER JOIN DANHMUC dm ON dm.MaDanhMucCha = qh.MaConChau
@@ -67,14 +64,14 @@ ORDER BY c.DuongDanPhanCap;
 -- ---------------------------------------------------------------------
 WITH RECURSIVE NhanhDanhMucCon AS (
     -- Chọn danh mục gốc cần tra cứu (có thể đổi MaDanhMuc = 1, 2, hoặc 3...)
-    SELECT MaDanhMuc, TenDanhMuc, MaDanhMucCha
+    SELECT MaDanhMuc, TenDanhMuc, MaDanhMucCha, 1 AS CapDo
     FROM DANHMUC
     WHERE MaDanhMuc = 1 
 
-    UNION
+    UNION ALL
 
-    -- UNION loại danh mục lặp nếu dữ liệu có chu trình.
-    SELECT dm.MaDanhMuc, dm.TenDanhMuc, dm.MaDanhMucCha
+    -- Đệ quy lấy toàn bộ danh mục con, cháu bên dưới
+    SELECT dm.MaDanhMuc, dm.TenDanhMuc, dm.MaDanhMucCha, ndm.CapDo + 1
     FROM DANHMUC dm
     INNER JOIN NhanhDanhMucCon ndm ON dm.MaDanhMucCha = ndm.MaDanhMuc
 )
@@ -99,7 +96,7 @@ ORDER BY ndm.MaDanhMuc, ts.MaTaiSan;
 -- HÀM BÁO CÁO CÓ BỘ LỌC ĐỘNG 
 -- Mục đích: Cho phép lọc danh sách phiên đấu giá theo nhiều tiêu chí tùy chọn:
 --   + p_MaDanhMucGoc : Lọc theo nhánh danh mục (tự động lấy cả danh mục con cháu)
---   + p_TrangThai    : Lọc theo trạng thái phiên (VD: 'DANG_DIEN_RA', 'DA_DONG')
+--   + p_TrangThai    : Lọc theo trạng thái phiên (VD: 'DANG_MO', 'DA_DONG'...)
 --   + p_LoaiTaiSan   : Lọc theo phân lớp ('TACPHAMNGHETHUAT', 'DOSUUTAM', 'THIETBIDIENTU')
 --   + p_GiaTu / p_GiaDen: Khoảng giá hiện tại (hoặc giá khởi điểm nếu chưa ai trả giá)
 --   + p_TuKhoa       : Tìm kiếm gần đúng (ILIKE) theo tên tài sản
@@ -140,7 +137,7 @@ BEGIN
             WHERE ($1 IS NULL AND dm.MaDanhMucCha IS NULL) 
                OR ($1 IS NOT NULL AND dm.MaDanhMuc = $1)
             
-            UNION
+            UNION ALL
             
             SELECT con.MaDanhMuc, con.TenDanhMuc, con.MaDanhMucCha
             FROM DANHMUC con
@@ -212,6 +209,11 @@ SELECT * FROM fn_BaoCaoPhienDauGiaDong(
     p_GiaTu      => 1000000,
     p_GiaDen     => 50000000
 );
+
+
+-- ===================== PHẦN THÀNH VIÊN 2 =====================
+-- Thứ tự chạy: DDL_HeThongDauGia.sql, seed_data.sql, queries.sql.
+BEGIN;
 
 -- Các phiên đang mở và sẽ kết thúc trong vòng một giờ.
 SELECT p.MaPhien, ts.TenTaiSan, p.GiaHienTai, p.ThoiDiemDong,
