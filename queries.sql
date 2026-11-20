@@ -247,9 +247,9 @@ END;
 $$;
 
 
--- 4. HÀM TRẢ GIÁ - PHƯƠNG ÁN 2: MỨC CÔ LẬP TUẦN TỰ HÓA CÓ RETRY LOOP
--- Sử dụng: Mức cô lập SERIALIZABLE (SSI) đọc lạc quan (KHÔNG dùng FOR UPDATE)
--- Tự động bắt mã lỗi 40001 (serialization_failure) và thử lại tối đa 5 lần
+-- 4. HÀM TRẢ GIÁ - PHƯƠNG ÁN 2: KIỂM SOÁT LẠC QUAN (OCC / SERIALIZABLE) CÓ RETRY LOOP
+-- Sử dụng: Đọc lạc quan KHÔNG dùng FOR UPDATE, kiểm tra xung đột qua cột PhienBan (Version)
+-- Tự động bắt mã lỗi 40001 (serialization_failure) và thử lại tối đa 5 lần với Random Backoff
 CREATE OR REPLACE FUNCTION fn_TraGia_Serializable(
     p_MaPhien BIGINT, 
     p_MaNguoiDung BIGINT, 
@@ -268,16 +268,26 @@ DECLARE
     v_ma_luot BIGINT;
     v_attempt INT;
 BEGIN
-    IF p_MaYeuCau IS NULL OR p_SoTien IS NULL OR p_SoTien <= 0 THEN
-        RAISE EXCEPTION 'Mã yêu cầu hoặc số tiền không hợp lệ';
+    -- Kiểm tra đầu vào đồng bộ với Phương án 1 (Khắc phục lỗi #18)
+    IF p_MaYeuCau IS NULL OR p_SoTien IS NULL OR p_SoTien <= 0
+       OR p_SoTien > 99999999999999.99 OR p_SoTien <> TRUNC(p_SoTien, 2) THEN
+        RAISE EXCEPTION 'Mã yêu cầu hoặc số tiền không hợp lệ' USING ERRCODE = '22023';
     END IF;
 
-    -- Vòng lặp thử lại tối đa 5 lần khi gặp xung đột tuần tự hóa (SERIALIZABLE)
+    -- Khóa tư vấn theo mã UUID để tuần tự hóa 2 request gửi trùng cùng lúc (Khắc phục lỗi #3)
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_MaYeuCau::TEXT, 19));
+
+    -- Vòng lặp thử lại tối đa 5 lần khi gặp xung đột tương tranh
     FOR v_attempt IN 1..5 LOOP
         BEGIN
             -- 1. Kiểm tra chống gửi lặp cùng mã yêu cầu (Idempotency)
             SELECT * INTO v_luot FROM LUOTTRAGIA WHERE MaYeuCau = p_MaYeuCau;
             IF FOUND THEN
+                IF v_luot.MaPhien IS DISTINCT FROM p_MaPhien
+                   OR v_luot.MaNguoiTraGia IS DISTINCT FROM p_MaNguoiDung
+                   OR v_luot.SoTien IS DISTINCT FROM p_SoTien THEN
+                    RAISE EXCEPTION 'Mã yêu cầu đã dùng cho lượt trả giá khác';
+                END IF;
                 RETURN v_luot.MaLuotTraGia;
             END IF;
 
@@ -287,21 +297,23 @@ BEGIN
                 RAISE EXCEPTION 'Phiên đấu giá không tồn tại hoặc không ở trạng thái mở';
             END IF;
 
-            -- 3. Kiểm tra điều kiện người tham gia và mức giá
-            SELECT MaNguoiBan INTO v_nguoi_ban FROM TAISAN WHERE MaTaiSan = v_phien.MaTaiSan;
+            -- 3. Kiểm tra điều kiện người tham gia và mức giá (giữ khóa FOR SHARE như Phương án 1)
+            SELECT MaNguoiBan INTO v_nguoi_ban FROM TAISAN
+            WHERE MaTaiSan = v_phien.MaTaiSan FOR SHARE;
             IF p_MaNguoiDung = v_nguoi_ban THEN
                 RAISE EXCEPTION 'Người bán không được trả giá tài sản của mình';
             END IF;
 
             SELECT TrangThaiDangKy INTO v_trang_thai_dang_ky FROM DANGKY
-            WHERE MaPhien = p_MaPhien AND MaNguoiDung = p_MaNguoiDung;
+            WHERE MaPhien = p_MaPhien AND MaNguoiDung = p_MaNguoiDung FOR SHARE;
             IF v_trang_thai_dang_ky IS DISTINCT FROM 'DA_DUYET' THEN
-                RAISE EXCEPTION 'Người trả giá chưa có đăng ký được duyệt';
+                RAISE EXCEPTION 'Người trả giá chưa có đăng ký được duyệt cho phiên này';
             END IF;
 
             v_gia_toi_thieu := COALESCE(v_phien.GiaHienTai + v_phien.BuocGia, v_phien.GiaKhoiDiem);
             IF p_SoTien < v_gia_toi_thieu OR MOD(p_SoTien - v_phien.GiaKhoiDiem, v_phien.BuocGia) <> 0 THEN
-                RAISE EXCEPTION 'Giá trả không hợp lệ (Tối thiểu %, bước giá %)', v_gia_toi_thieu, v_phien.BuocGia;
+                RAISE EXCEPTION 'Giá trả phải từ % và đúng lưới bước giá %',
+                    v_gia_toi_thieu, v_phien.BuocGia;
             END IF;
 
             v_thoi_diem := clock_timestamp();
@@ -309,14 +321,20 @@ BEGIN
                 RAISE EXCEPTION 'Thời điểm trả giá nằm ngoài khung giờ nhận lượt';
             END IF;
 
-            -- 4. Ghi nhận lượt trả giá và cập nhật phiên nguyên tử
+            -- 4. Ghi nhận lượt trả giá và cập nhật phiên kèm kiểm tra PhienBan (Khắc phục lỗi #1 & #2)
             INSERT INTO LUOTTRAGIA (MaPhien, MaNguoiTraGia, SoTien, MaYeuCau, ThoiDiemChapNhan)
             VALUES (p_MaPhien, p_MaNguoiDung, p_SoTien, p_MaYeuCau, v_thoi_diem)
             RETURNING MaLuotTraGia INTO v_ma_luot;
 
             UPDATE PHIENDAUGIA
             SET GiaHienTai = p_SoTien, MaLuotDanDau = v_ma_luot, PhienBan = PhienBan + 1
-            WHERE MaPhien = p_MaPhien;
+            WHERE MaPhien = p_MaPhien AND PhienBan = v_phien.PhienBan;
+
+            IF NOT FOUND THEN
+                -- PhienBan đã bị giao dịch khác thay đổi -> Chủ động kích hoạt mã lỗi 40001 để Retry
+                RAISE EXCEPTION 'Xung đột phiên bản dữ liệu khi cập nhật đồng thời'
+                    USING ERRCODE = 'serialization_failure';
+            END IF;
 
             INSERT INTO NHATKYTHAYDOI (MaPhien, MaTacNhan, HanhDong, ChiTiet, ThoiDiemGhi)
             VALUES (p_MaPhien, p_MaNguoiDung, 'CHAP_NHAN_TRA_GIA',
@@ -326,12 +344,14 @@ BEGIN
             RETURN v_ma_luot; -- Trả về thành công
 
         EXCEPTION
-            -- Bắt lỗi xung đột SERIALIZABLE, tự động thử lại
-            WHEN serialization_failure OR deadlock_detected THEN
-                IF v_attempt = 5 THEN
-                    RAISE EXCEPTION 'Giao dịch thất bại sau 5 lần thử lại do xung đột tuần tự hóa';
+            -- Bắt lỗi xung đột tuần tự hóa (40001), deadlock hoặc trùng mức giá đồng thời
+            WHEN serialization_failure OR deadlock_detected OR unique_violation THEN
+                -- Nếu bên ngoài đang bọc trong SERIALIZABLE/REPEATABLE READ thì ném thẳng 40001 ra ngoài
+                IF current_setting('transaction_isolation') <> 'read committed' OR v_attempt = 5 THEN
+                    RAISE EXCEPTION 'Giao dịch thất bại sau % lần thử lại do xung đột tuần tự hóa', v_attempt
+                        USING ERRCODE = 'serialization_failure';
                 END IF;
-                -- Nghỉ một khoảng ngắn trước khi thử lại
+                -- Ở chế độ mặc định, nghỉ Random Backoff rồi tự nạp lại Snapshot mới nhất ở vòng lặp kế tiếp
                 PERFORM pg_sleep(0.01 * v_attempt + random() * 0.02);
         END;
     END LOOP;
