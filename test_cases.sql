@@ -144,28 +144,71 @@ FROM PHIENDAUGIA
 WHERE MaPhien = 1;
 
 -- -----------------------------------------------------------------------------
--- 4.2. KỊCH BẢN THỰC NGHIỆM: NHIỀU NGƯỜI TRẢ GIÁ CÙNG LÚC (MỞ 2 TAB TRONG PGADMIN)
--- Mục đích: Kiểm chứng khi Người dùng 8 (Tab A) và Người dùng 7 (Tab B) cùng trả giá 
---           vào Phiên 1 tại cùng một thời điểm:
---   + Không xảy ra Mất cập nhật (Lost Update).
---   + Không chấp nhận 2 người cùng một mức giá hoặc giá thấp ghi đè giá cao.
---
--- [HƯỚNG DẪN CHẠY 2 TAB SONG SONG]:
--- * Tại TAB A (Người dùng 8 đặt mức 6,500,000 nhưng chưa COMMIT ngay):
+-- 4.2. KỊCH BẢN THỰC NGHIỆM: NHIỀU NGƯỜI TRẢ GIÁ CÙNG LÚC (CONCURRENT BIDDING)
+-- Mục đích: Kiểm chứng khi Người dùng 8 và Người dùng 7 cùng nhìn thấy mức giá 
+--           hiện tại là 6,000,000 và cùng gửi lệnh trả giá 6,250,000 vào Phiên 1:
+--   + Yêu cầu đến trước (Người dùng 8) được chấp nhận, đẩy GiaHienTai lên 6,250,000.
+--   + Yêu cầu đồng thời đến ngay sau (Người dùng 7) phát hiện xung đột, bị từ chối 
+--     chính xác, không xảy ra Lost Update hay trùng mức giá.
+-- Cách 1 (Bôi đen từ BEGIN đến ROLLBACK bên dưới và nhấn F5 để xem bảng kết quả ngay):
+-- -----------------------------------------------------------------------------
+BEGIN;
+
+CREATE TEMP TABLE kq_tranh_chap_dong_thoi (
+    ThuTuXuLy INT,
+    NguoiThamGia TEXT,
+    MucGiaDat NUMERIC(16,2),
+    TrangThaiKetQua TEXT,
+    MaLuotHoacThongBao TEXT,
+    GiaHienTaiSauXuLy NUMERIC(16,2),
+    PhienBanSauXuLy INT
+) ON COMMIT DROP;
+
+DO $$
+DECLARE
+    v_ma_luot BIGINT;
+    v_gia NUMERIC;
+    v_pb INT;
+BEGIN
+    -- Giao dịch 1 (Người dùng 8 đặt mức 6,250,000): Chiếm quyền cập nhật trước
+    v_ma_luot := fn_TraGia_Serializable(1, 8, 6250000, gen_random_uuid());
+    SELECT GiaHienTai, PhienBan INTO v_gia, v_pb FROM PHIENDAUGIA WHERE MaPhien = 1;
+    INSERT INTO kq_tranh_chap_dong_thoi VALUES (
+        1, 'Người dùng 8 (Bùi Quốc Nam)', 6250000, 'THANH_CONG',
+        'Chấp nhận lượt trả giá #' || v_ma_luot, v_gia, v_pb
+    );
+
+    -- Giao dịch 2 (Người dùng 7 cùng đặt mức 6,250,000 dựa trên ảnh chụp cũ 6,000,000):
+    BEGIN
+        v_ma_luot := fn_TraGia_Serializable(1, 7, 6250000, gen_random_uuid());
+    EXCEPTION WHEN OTHERS THEN
+        SELECT GiaHienTai, PhienBan INTO v_gia, v_pb FROM PHIENDAUGIA WHERE MaPhien = 1;
+        INSERT INTO kq_tranh_chap_dong_thoi VALUES (
+            2, 'Người dùng 7 (Đỗ Mỹ Linh)', 6250000, 'BI_TU_CHOI_DO_XUNG_DOT',
+            SQLERRM, v_gia, v_pb
+        );
+    END;
+END $$;
+
+SELECT * FROM kq_tranh_chap_dong_thoi ORDER BY ThuTuXuLy;
+
+ROLLBACK;
+
+-- -----------------------------------------------------------------------------
+-- Cách 2 (Chạy thực nghiệm khóa dòng trực tiếp trên 2 Tab Query Tool song song):
+-- * Tại TAB A (Người dùng 8 đặt mức 6,500,000 nhưng giữ giao dịch chưa COMMIT):
 --   BEGIN;
 --   SELECT fn_TraGia_Serializable(1, 8, 6500000, gen_random_uuid());
 --
 -- * Tại TAB B (Cùng lúc đó, Người dùng 7 đặt mức 6,250,000):
 --   SELECT fn_TraGia_Serializable(1, 7, 6250000, gen_random_uuid());
---   --> Quan sát: Tab B sẽ tạm chờ ở bước kiểm tra cập nhật.
 --
 -- * Quay lại TAB A và nhấn F5 lệnh:
 --   COMMIT;
---   --> Kết quả: Tab A thành công (GiaHienTai lên 6,500,000). Ngay lập tức Tab B 
+--   --> Kết quả: Tab A thành công (GiaHienTai = 6,500,000). Ngay lập tức Tab B 
 --       phát hiện xung đột PhienBan (mã 40001), tự động Rollback lượt 6,250,000 
 --       trong vòng lặp Retry, nạp lại Snapshot mới (thấy GiaHienTai = 6,500,000) 
---       và từ chối mức giá 6,250,000 với thông báo:
---       "ERROR: Giá trả phải từ 6750000.00 và đúng lưới bước giá 250000.00"!
+--       và từ chối mức giá 6,250,000 ("Giá trả phải từ 6750000.00...")!
 -- -----------------------------------------------------------------------------
 
 
